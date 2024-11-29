@@ -3,11 +3,40 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class LightGCN(nn.Module):
-    def __init__(self, config, dataset, creator_features=None, item_features=None):
-        super(LightGCN, self).__init__()
+class Model(nn.Module):
+    """
+    Base class for all models. Defines the common interface.
+    """
+    def __init__(self, config, dataset):
+        super(Model, self).__init__()
         self.config = config
         self.dataset = dataset
+
+    def forward(self):
+        """
+        Must be implemented in subclasses.
+        """
+        raise NotImplementedError
+
+    def calculate_loss(self, users, items, labels):
+        """
+        Calculates the loss. Must be implemented in subclasses.
+        """
+        raise NotImplementedError
+
+    def predict(self, users, items):
+        """
+        Predicts scores for given users and items.
+        """
+        raise NotImplementedError
+
+
+class LightGCN(Model):
+    """
+    Implementation of LightGCN model using similarity_matrix.csv for edge weights.
+    """
+    def __init__(self, config, dataset):
+        super(LightGCN, self).__init__(config, dataset)
 
         # Basic configurations
         self.n_users = dataset.n_users
@@ -19,85 +48,67 @@ class LightGCN(nn.Module):
         self.user_embedding = nn.Embedding(self.n_users, self.latent_dim)
         self.item_embedding = nn.Embedding(self.m_items, self.latent_dim)
 
-        # Metadata feature embeddings (optional)
-        self.creator_features = creator_features
-        self.item_features = item_features
-        self.creator_feature_layers = self._create_feature_layers(creator_features)
-        self.item_feature_layers = self._create_feature_layers(item_features)
+        # Metadata features (optional)
+        self.creator_features = dataset.get_creator_features()
+        self.item_features = dataset.get_item_features()
+
+        # Adjacency matrix from dataset
+        self.adjacency = dataset.getSparseGraph()
 
         # Initialize weights
         self._init_weights()
 
     def _init_weights(self):
+        """
+        Initializes embeddings using Xavier uniform distribution.
+        """
         nn.init.xavier_uniform_(self.user_embedding.weight)
         nn.init.xavier_uniform_(self.item_embedding.weight)
-
-    def _create_feature_layers(self, features):
-        """
-        Creates feature transformation layers for metadata features.
-        :param features: Dictionary of features (from dataset)
-        :return: nn.ModuleDict of transformation layers
-        """
-        if features is None:
-            return None
-
-        layers = nn.ModuleDict()
-        for feature_name, feature_data in features.items():
-            input_dim = feature_data.size(-1)
-            layers[feature_name] = nn.Linear(input_dim, self.latent_dim)
-        return layers
 
     def forward(self):
         """
         Forward pass for LightGCN.
         """
+        # Initialize user and item embeddings
         user_embeddings = self.user_embedding.weight
         item_embeddings = self.item_embedding.weight
 
-        # Integrate metadata features if available
+        # Optionally integrate metadata features
         if self.creator_features:
-            creator_feature_embedding = self._process_features(
-                self.creator_features, self.creator_feature_layers
-            )
-            user_embeddings = user_embeddings + creator_feature_embedding
-
+            user_embeddings = self._integrate_metadata(user_embeddings, self.creator_features)
         if self.item_features:
-            item_feature_embedding = self._process_features(
-                self.item_features, self.item_feature_layers
-            )
-            item_embeddings = item_embeddings + item_feature_embedding
+            item_embeddings = self._integrate_metadata(item_embeddings, self.item_features)
 
         # Perform graph propagation
         all_embeddings = self.graph_propagation(user_embeddings, item_embeddings)
 
         return all_embeddings
 
-    def _process_features(self, features, layers):
+    def _integrate_metadata(self, embeddings, features):
         """
-        Processes metadata features through feature layers.
-        :param features: Feature dictionary
-        :param layers: Feature layers
-        :return: Combined feature embedding
+        Integrates metadata features into node embeddings.
         """
-        feature_embeddings = []
-        for feature_name, feature_data in features.items():
-            feature_embedding = layers[feature_name](feature_data)
-            feature_embeddings.append(feature_embedding)
-        return sum(feature_embeddings)
+        for key, feature in features.items():
+            embeddings += feature
+        return embeddings
 
     def graph_propagation(self, user_embeddings, item_embeddings):
         """
-        Performs LightGCN graph propagation.
+        Performs LightGCN graph propagation using the precomputed adjacency matrix.
         """
+        # Combine user and item embeddings
         embeddings = torch.cat([user_embeddings, item_embeddings], dim=0)
-        adjacency = self.dataset.getSparseGraph()
-
         all_embeddings = [embeddings]
+
+        # Propagate through layers
         for layer in range(self.n_layers):
-            embeddings = torch.sparse.mm(adjacency, embeddings)
+            embeddings = torch.sparse.mm(self.adjacency, embeddings)
             all_embeddings.append(embeddings)
 
+        # Aggregate embeddings from all layers
         all_embeddings = torch.stack(all_embeddings, dim=1).mean(dim=1)
+
+        # Split into user and item embeddings
         user_final, item_final = torch.split(all_embeddings, [self.n_users, self.m_items])
         return user_final, item_final
 

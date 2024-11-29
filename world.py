@@ -1,17 +1,8 @@
-'''
-Created on Mar 1, 2020
-Pytorch Implementation of LightGCN in
-Xiangnan He et al. LightGCN: Simplifying and Powering Graph Convolution Network for Recommendation
-
-@author: Jianbai Ye (gusye@mail.ustc.edu.cn)
-'''
-
 import os
 from os.path import join
 import torch
-from enum import Enum
-from parse import parse_args
 import multiprocessing
+from parse import parse_args
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 args = parse_args()
@@ -24,20 +15,20 @@ FILE_PATH = join(CODE_PATH, 'checkpoints')
 import sys
 sys.path.append(join(CODE_PATH, 'sources'))
 
-
 if not os.path.exists(FILE_PATH):
     os.makedirs(FILE_PATH, exist_ok=True)
 
-
+# Configuration dictionary
 config = {}
-all_dataset = ['lastfm', 'gowalla', 'yelp2018', 'amazon-book']
-all_models  = ['mf', 'lgn']
-# config['batch_size'] = 4096
+all_dataset = ['lastfm', 'gowalla', 'yelp2018', 'amazon-book', 'custom-similarity']
+all_models = ['mf', 'lgn']
+
+# Basic configurations
 config['bpr_batch_size'] = args.bpr_batch
 config['latent_dim_rec'] = args.recdim
-config['lightGCN_n_layers']= args.layer
+config['lightGCN_n_layers'] = args.layer
 config['dropout'] = args.dropout
-config['keep_prob']  = args.keepprob
+config['keep_prob'] = args.keepprob
 config['A_n_fold'] = args.a_fold
 config['test_u_batch_size'] = args.testbatch
 config['multicore'] = args.multicore
@@ -47,34 +38,40 @@ config['pretrain'] = args.pretrain
 config['A_split'] = False
 config['bigdata'] = False
 
+# Add custom dataset file paths
+config['creator_file'] = join(DATA_PATH, 'Creator_random25.csv')
+config['item_file'] = join(DATA_PATH, 'Item_random25.csv')
+config['similarity_matrix_file'] = join(DATA_PATH, 'similarity_matrix.csv')
+config['threshold'] = 0.5  # Similarity threshold for graph construction
+
+# Device configuration
 GPU = torch.cuda.is_available()
 device = torch.device('cuda' if GPU else "cpu")
 CORES = multiprocessing.cpu_count() // 2
 seed = args.seed
 
+# Dataset and model settings
 dataset = args.dataset
 model_name = args.model
 if dataset not in all_dataset:
-    raise NotImplementedError(f"Haven't supported {dataset} yet!, try {all_dataset}")
+    raise NotImplementedError(f"Dataset '{dataset}' not supported! Available datasets: {all_dataset}")
 if model_name not in all_models:
-    raise NotImplementedError(f"Haven't supported {model_name} yet!, try {all_models}")
+    raise NotImplementedError(f"Model '{model_name}' not supported! Available models: {all_models}")
 
-
-
-
+# Training and evaluation settings
 TRAIN_epochs = args.epochs
 LOAD = args.load
 PATH = args.path
 topks = eval(args.topks)
 tensorboard = args.tensorboard
 comment = args.comment
-# let pandas shut up
+
+# Suppress pandas warnings
 from warnings import simplefilter
 simplefilter(action="ignore", category=FutureWarning)
 
 
-
-def cprint(words : str):
+def cprint(words: str):
     print(f"\033[0;30;43m{words}\033[0m")
 
 logo = r"""
@@ -85,6 +82,5 @@ logo = r"""
 ███████╗╚██████╔╝██║ ╚████║
 ╚══════╝ ╚═════╝ ╚═╝  ╚═══╝
 """
-# font: ANSI Shadow
-# refer to http://patorjk.com/software/taag/#p=display&f=ANSI%20Shadow&t=Sampling
+# Uncomment this to print the logo
 # print(logo)

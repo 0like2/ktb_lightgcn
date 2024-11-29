@@ -9,6 +9,38 @@ from sentence_transformers import SentenceTransformer
 from world import cprint
 
 
+class BasicDataset:
+    """
+    Base class for datasets in LightGCN.
+    Defines the interface for all dataset types.
+    """
+    def __init__(self):
+        raise NotImplementedError("This is an interface class. Do not instantiate directly.")
+
+    @property
+    def n_users(self):
+        raise NotImplementedError
+
+    @property
+    def m_items(self):
+        raise NotImplementedError
+
+    @property
+    def trainDataSize(self):
+        raise NotImplementedError
+
+    @property
+    def testDict(self):
+        raise NotImplementedError
+
+    @property
+    def allPos(self):
+        raise NotImplementedError
+
+    def getSparseGraph(self):
+        raise NotImplementedError
+
+
 class TextEmbedder:
     def __init__(self, model_name='paraphrase-MiniLM-L6-v2'):
         self.model = SentenceTransformer(model_name)
