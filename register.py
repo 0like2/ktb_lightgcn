@@ -1,22 +1,17 @@
 import world
 import dataloader
 import model
-import utils
 from pprint import pprint
 
 # Dataset initialization
-if world.dataset == 'lastfm':
-    # For debugging purposes
-    print("Loading LastFM dataset for debugging...")
-    dataset = dataloader.LastFM()
-elif world.dataset == 'custom-similarity':
-    # For custom similarity-based dataset
+if world.dataset == 'custom-similarity':
     dataset = dataloader.SimilarityDataset(
         creator_file=world.config['creator_file'],
         item_file=world.config['item_file'],
         similarity_matrix_file=world.config['similarity_matrix_file'],
-        threshold=world.config.get('threshold', 0.5)
+        config=world.config
     )
+    print(f"Dataset initialized: {type(dataset)} with {len(dataset.creators)} creators and {len(dataset.items)} items.") # 디버깅 -> 삭제
 else:
     raise ValueError(f"Unknown dataset: {world.dataset}")
 
@@ -34,18 +29,18 @@ print('===========end===================')
 
 # Model selection
 MODELS = {
-    'mf': model.PureMF,
     'lgn': lambda config, dataset: model.LightGCN(
         config=config,
-        dataset=dataset,
-        creator_features=dataset.get_creator_features() if hasattr(dataset, 'get_creator_features') else None,
-        item_features=dataset.get_item_features() if hasattr(dataset, 'get_item_features') else None
+        dataset=dataset
     )
 }
 
 # Model initialization
 if world.model_name not in MODELS:
     raise ValueError(f"Unknown model: {world.model_name}")
+else:
+    print(f"Selected model: {world.model_name}")
 
 Recmodel = MODELS[world.model_name](world.config, dataset)
 Recmodel = Recmodel.to(world.device)
+print(f"Model initialized: {type(Recmodel)} on device {world.device}") # 디버깅 -> 삭제

@@ -6,8 +6,8 @@ import torch
 from torch import nn, optim
 import numpy as np
 from dataloader import BasicDataset
-from sklearn.metrics import roc_auc_score
-from time import time
+import os
+
 
 class BPRLoss:
     def __init__(self, recmodel: nn.Module, config: dict):
@@ -28,27 +28,42 @@ class BPRLoss:
         return loss.cpu().item()
 
 
-def UniformSample_similarity_based(dataset, neg_ratio=1):
+def UniformSample_similarity_based(dataset):
     """
-    Samples positive and negative items based on category similarity.
+    Uniformly samples negative items for users based on similarity.
     """
-    dataset: BasicDataset
-    allPos = dataset.allPos
-    similarity_matrix = dataset.similarity_matrix.values
+    allPos = dataset.allPos  # 긍정적 아이템
+    allNeg = dataset.allNeg  # 부정적 아이템
+    n_users = dataset.n_users
     S = []
-    for user in range(dataset.n_users):
-        posForUser = allPos[user]
-        if len(posForUser) == 0:
+
+    for user in range(n_users):
+        pos_items = allPos[user]
+        neg_items = allNeg[user]
+
+        if not neg_items:  # 부정적 아이템이 없으면 건너뜀
+            print(f"[WARNING] User {user} has no negative items.")
             continue
-        for _ in range(neg_ratio):
-            pos_item = np.random.choice(posForUser)
-            while True:
-                neg_item = np.random.randint(0, dataset.m_items)
-                if neg_item not in posForUser:
-                    if similarity_matrix[pos_item, neg_item] < dataset.threshold:
-                        break
+
+        for pos_item in pos_items:
+            neg_item = np.random.choice(neg_items)  # 부정적 아이템 랜덤 선택
             S.append([user, pos_item, neg_item])
+
     return np.array(S)
+
+
+
+def getFileName():
+    """
+    Generates a file name for saving model weights or embeddings.
+    """
+    if world.model_name == 'mf':
+        file = f"mf-{world.dataset}-{world.config['latent_dim']}.pth.tar"
+    elif world.model_name == 'lgn':
+        file = f"lgn-{world.dataset}-{world.config['n_layers']}-{world.config['latent_dim']}.pth.tar"
+    else:
+        raise ValueError(f"Unknown model name: {world.model_name}")
+    return os.path.join(world.FILE_PATH, file)
 
 
 def set_seed(seed):
@@ -103,3 +118,20 @@ def NDCGatK_r(test_data, r, k):
     idcg[idcg == 0.] = 1.
     ndcg = dcg / idcg
     return np.sum(ndcg)
+
+def getLabel(test_data, pred_data):
+    """
+    Compares predicted data with ground truth to generate binary relevance labels.
+
+    Parameters:
+    - test_data (list of lists): Ground truth data for each user or group.
+    - pred_data (list of lists): Predicted top-K items for each user or group.
+
+    Returns:
+    - np.ndarray: Binary relevance labels for each user or group.
+    """
+    r = []
+    for groundTrue, predictTopK in zip(test_data, pred_data):  # 수정: zip을 사용해 더 직관적
+        pred = np.array([1.0 if x in groundTrue else 0.0 for x in predictTopK])  # 수정: list comprehension 사용
+        r.append(pred)
+    return np.array(r)

@@ -4,10 +4,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Go lightGCN")
     parser.add_argument('--bpr_batch', type=int, default=2048,
                         help="the batch size for bpr loss training procedure")
-    parser.add_argument('--recdim', type=int, default=64,
+    parser.add_argument('--latent_dim', type=int, default=64,  # 이름 변경
                         help="the embedding size of lightGCN")
-    parser.add_argument('--layer', type=int, default=3,
-                        help="the layer num of lightGCN")
+    parser.add_argument('--n_layers', type=int, default=3,  # 이름 변경
+                        help="the number of layers in LightGCN")
     parser.add_argument('--lr', type=float, default=0.001,
                         help="the learning rate")
     parser.add_argument('--decay', type=float, default=1e-4,
@@ -39,9 +39,6 @@ def parse_args():
                         help='random seed')
     parser.add_argument('--model', type=str, default='lgn',
                         help='rec-model, support [mf, lgn]')
-    # New arguments
-    parser.add_argument('--similarity_threshold', type=float, default=0.5,
-                        help="Threshold for similarity graph generation.")
     parser.add_argument('--top_k', type=int, default=3,
                         help="Number of top recommendations to generate.")
     parser.add_argument('--train_new_data', type=int, default=0,

@@ -5,9 +5,7 @@ import world
 import numpy as np
 import torch
 import utils
-from tqdm import tqdm
 from time import time
-from utils import timer
 import multiprocessing
 
 CORES = multiprocessing.cpu_count() // 2
@@ -17,13 +15,22 @@ def BPR_train(dataset, recommend_model, loss_class, epoch, neg_k=1, w=None):
     """
     Trains LightGCN using BPR loss with similarity-based graph.
     """
+    print("[DEBUG] Starting BPR_train...")
     Recmodel = recommend_model
     Recmodel.train()
     bpr: utils.BPRLoss = loss_class
 
     # Sampling positive and negative examples
-    with timer(name="Sample"):
-        S = utils.UniformSample_original(dataset)
+    start_time = time()
+    S = utils.UniformSample_similarity_based(dataset)  # Uniform sampling without threshold filtering
+    sample_time = time() - start_time
+    print(f"[DEBUG] Sampled data S shape: {S.shape if isinstance(S, np.ndarray) else 'Not an ndarray'}")
+    print(f"[DEBUG] Sampled data S (first 5 rows): {S[:5] if isinstance(S, np.ndarray) else 'N/A'}")
+
+    if len(S) == 0 or S.ndim < 2:
+        print("[ERROR] Sampling returned empty or invalid results. Check the sampling logic.")
+        return
+
     users = torch.Tensor(S[:, 0]).long()
     posItems = torch.Tensor(S[:, 1]).long()
     negItems = torch.Tensor(S[:, 2]).long()
@@ -46,10 +53,12 @@ def BPR_train(dataset, recommend_model, loss_class, epoch, neg_k=1, w=None):
         average_loss += cri
         if world.tensorboard and w is not None:
             w.add_scalar(f'BPRLoss/BPR', cri, epoch * int(len(users) / world.config['bpr_batch_size']) + batch_i)
+
     average_loss /= total_batch
-    time_info = timer.dict()
-    timer.zero()
-    return f"loss{average_loss:.3f}-{time_info}"
+    train_time = time() - start_time
+
+    print(f"[BPR Train] Epoch {epoch}, Loss: {average_loss:.4f}, Sample Time: {sample_time:.2f}s, Train Time: {train_time:.2f}s")
+    return f"loss{average_loss:.3f}"
 
 
 def test_one_batch(X):
@@ -87,6 +96,7 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0):
                'recall': np.zeros(len(world.topks)),
                'ndcg': np.zeros(len(world.topks))}
 
+    pool = None
     if multicore == 1:
         pool = multiprocessing.Pool(CORES)
 
@@ -97,11 +107,22 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0):
         users_list, rating_list, groundTrue_list = [], [], []
 
         for batch_users in utils.minibatch(users, batch_size=u_batch_size):
-            allPos = dataset.getUserPosItems(batch_users)  # Positive items for users
+            batch_users = [int(u) for u in batch_users[0]]
+            allPos = []
+            for u in batch_users:
+                user_category = dataset.creators.iloc[u]['channel_category']
+                pos_items = np.where(dataset.similarity_matrix[user_category] > 0)[0]
+                allPos.append(pos_items)
+
             groundTrue = [testDict[u] for u in batch_users]
 
             batch_users_gpu = torch.Tensor(batch_users).long().to(world.device)
-            rating = Recmodel.getUsersRating(batch_users_gpu)  # Predicted ratings
+            rating = Recmodel.getUsersRating(
+                batch_users_gpu,
+                creators_metadata=dataset.creators,
+                items_metadata=dataset.items,
+                similarity_matrix=dataset.similarity_matrix
+            )  # Predicted ratings
 
             # Exclude training positives from recommendation
             exclude_index, exclude_items = [], []

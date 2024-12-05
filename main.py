@@ -1,157 +1,90 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+import world
+import utils
+from world import cprint
+from tensorboardX import SummaryWriter
+import time
+from os.path import join
+import Procedure
+import register
 
+# ==============================
+# SEED 설정
+utils.set_seed(world.seed)
+print(f">> SEED: {world.seed}")
+# ==============================
 
-class Model(nn.Module):
-    """
-    Base class for all models. Defines the common interface.
-    """
-    def __init__(self, config, dataset):
-        super(Model, self).__init__()
-        self.config = config
-        self.dataset = dataset
+# Dataset 및 모델 초기화
+print(f">> Initializing dataset: {world.dataset}")
+dataset = register.dataset  # register에서 dataset 참조
 
-    def forward(self):
-        """
-        Must be implemented in subclasses.
-        """
-        raise NotImplementedError
+print(f">> Initializing model: {world.model_name}")
+Recmodel = register.MODELS[world.model_name](
+    world.config, dataset
+)
+Recmodel = Recmodel.to(world.device)
+print(f">> Model initialized: {type(Recmodel)} on device {world.device}")
 
-    def calculate_loss(self, users, items, labels):
-        """
-        Calculates the loss. Must be implemented in subclasses.
-        """
-        raise NotImplementedError
+# 손실 함수 초기화
+bpr = utils.BPRLoss(Recmodel, world.config)
+print(f">> BPR Loss initialized with weight decay: {world.config['decay']}")
 
-    def predict(self, users, items):
-        """
-        Predicts scores for given users and items.
-        """
-        raise NotImplementedError
+# 파일 경로 설정
+weight_file = utils.getFileName()
+embedding_file = f"{weight_file}_embeddings.pth"
+print(f"Model weight file path: {weight_file}")
+print(f"Model embedding file path: {embedding_file}")
 
+# 모델 로드
+if world.LOAD:
+    try:
+        Recmodel.load_model(weight_file, embedding_file)
+        cprint(f"Loaded model weights and embeddings from {weight_file} and {embedding_file}")
+    except FileNotFoundError:
+        print(f"{weight_file} or {embedding_file} does not exist. Starting from scratch.")
+Neg_k = 1
 
-class LightGCN(Model):
-    """
-    Implementation of LightGCN model with metadata and similarity-based graph.
-    """
-    def __init__(self, config, dataset, creator_features=None, item_features=None):
-        super(LightGCN, self).__init__(config, dataset)
+# TensorBoard 초기화
+if world.tensorboard:
+    tensorboard_path = join(
+        str(world.BOARD_PATH),
+        time.strftime("%m-%d-%Hh%Mm%Ss-") + "-" + str(world.comment)
+    )
+    writer = SummaryWriter(tensorboard_path)
+    print(f"TensorBoard initialized at {tensorboard_path}")
+else:
+    writer = None
+    cprint("TensorBoard is not enabled.")
 
-        # Basic configurations
-        self.n_users = dataset.n_users
-        self.m_items = dataset.m_items
-        self.latent_dim = config['latent_dim']
-        self.n_layers = config['n_layers']
+# 훈련 루프
+try:
+    for epoch in range(world.TRAIN_epochs):
+        start = time.time()
 
-        # Embeddings for users and items
-        self.user_embedding = nn.Embedding(self.n_users, self.latent_dim)
-        self.item_embedding = nn.Embedding(self.m_items, self.latent_dim)
+        # 매 10번째 epoch마다 테스트 수행
+        if epoch % 10 == 0:
+            cprint("[TEST]")
+            Procedure.Test(
+                dataset, Recmodel, epoch, writer, world.config.get('multicore', False)
+            )
 
-        # Metadata feature embeddings (optional)
-        self.creator_features = creator_features
-        self.item_features = item_features
-        self.creator_feature_layers = self._create_feature_layers(creator_features)
-        self.item_feature_layers = self._create_feature_layers(item_features)
+        # 한 epoch 동안 학습
+        output_information = Procedure.BPR_train(
+            dataset, Recmodel, bpr, epoch, neg_k=Neg_k, w=writer
+        )
+        print(f"EPOCH[{epoch + 1}/{world.TRAIN_epochs}] {output_information}")
 
-        # Graph structure
-        self.adjacency = dataset.getSparseGraph()
+        # 모델 가중치 및 임베딩 저장
+        Recmodel.save_model(weight_file, embedding_file)
+        print(f"Saved model and embeddings at epoch {epoch + 1}")
 
-        # Initialize weights
-        self._init_weights()
+finally:
+    # TensorBoard 종료
+    if writer:
+        writer.close()
+        print("TensorBoard writer closed.")
 
-    def _init_weights(self):
-        nn.init.xavier_uniform_(self.user_embedding.weight)
-        nn.init.xavier_uniform_(self.item_embedding.weight)
+    # 훈련 종료 후 모델 최종 저장
+    print("Saving model and embeddings after training...")
+    Recmodel.save_model(weight_file, embedding_file)
 
-    def _create_feature_layers(self, features):
-        """
-        Creates feature transformation layers for metadata features.
-        """
-        if features is None:
-            return None
-
-        layers = nn.ModuleDict()
-        for feature_name, feature_data in features.items():
-            input_dim = feature_data.size(-1)
-            layers[feature_name] = nn.Linear(input_dim, self.latent_dim)
-        return layers
-
-    def _integrate_metadata(self, embeddings, features, layers):
-        """
-        Integrates metadata features into embeddings.
-        """
-        if features is None or layers is None:
-            return embeddings
-        for key, feature in features.items():
-            embeddings += layers[key](feature)
-        return embeddings
-
-    def forward(self):
-        """
-        Forward pass for LightGCN.
-        """
-        user_embeddings = self.user_embedding.weight
-        item_embeddings = self.item_embedding.weight
-
-        # Integrate metadata features if available
-        user_embeddings = self._integrate_metadata(user_embeddings, self.creator_features, self.creator_feature_layers)
-        item_embeddings = self._integrate_metadata(item_embeddings, self.item_features, self.item_feature_layers)
-
-        # Perform graph propagation
-        all_embeddings = self.graph_propagation(user_embeddings, item_embeddings)
-
-        return all_embeddings
-
-    def graph_propagation(self, user_embeddings, item_embeddings):
-        """
-        Performs LightGCN graph propagation.
-        """
-        embeddings = torch.cat([user_embeddings, item_embeddings], dim=0)
-
-        all_embeddings = [embeddings]
-        for layer in range(self.n_layers):
-            embeddings = torch.sparse.mm(self.adjacency, embeddings)
-            all_embeddings.append(embeddings)
-
-        all_embeddings = torch.stack(all_embeddings, dim=1).mean(dim=1)
-        user_final, item_final = torch.split(all_embeddings, [self.n_users, self.m_items])
-        return user_final, item_final
-
-    def calculate_loss(self, users, pos_items, neg_items):
-        """
-        Calculates BPR loss for the model.
-        """
-        user_embeddings, item_embeddings = self.forward()
-        user_latent = user_embeddings[users]
-        pos_latent = item_embeddings[pos_items]
-        neg_latent = item_embeddings[neg_items]
-
-        pos_scores = torch.sum(user_latent * pos_latent, dim=-1)
-        neg_scores = torch.sum(user_latent * neg_latent, dim=-1)
-
-        loss = -torch.mean(F.logsigmoid(pos_scores - neg_scores))
-        reg_loss = (user_latent.norm(2).pow(2) +
-                    pos_latent.norm(2).pow(2) +
-                    neg_latent.norm(2).pow(2)) / 2
-        return loss + self.config['decay'] * reg_loss
-
-    def getUsersRating(self, users):
-        """
-        Predicts scores for all items for given users.
-        """
-        user_embeddings, item_embeddings = self.forward()
-        user_latent = user_embeddings[users]
-        scores = torch.matmul(user_latent, item_embeddings.T)
-        return scores
-
-    def predict(self, users, items):
-        """
-        Predicts scores for given users and items.
-        """
-        user_embeddings, item_embeddings = self.forward()
-        user_latent = user_embeddings[users]
-        item_latent = item_embeddings[items]
-
-        scores = torch.sum(user_latent * item_latent, dim=1)
-        return scores
+print("Model training and saving completed.")
