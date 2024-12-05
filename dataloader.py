@@ -149,7 +149,6 @@ class SimilarityDataset(BasicDataset):
         # 사용자-사용자 연결 (빈 행렬)
         user_user_graph = csr_matrix((n_users, n_users))
         # 아이템-아이템 연결 (빈 행렬)
-
         item_item_graph = csr_matrix((m_items, m_items))
 
         # 상단 행렬 (사용자-사용자 | 사용자-아이템)
@@ -166,21 +165,16 @@ class SimilarityDataset(BasicDataset):
         return graph
 
     def __build_test(self, threshold=0.85):
-        """
-        Builds the test dictionary based on user and item category similarity.
-        Ensures test items do not overlap with training items.
-        """
         test_data = {}
 
         for user_id in range(self.n_users):
-            user_category = self.creators.iloc[user_id]['channel_category']  # 유저 카테고리 가져오기
+            user_category = self.creators.iloc[user_id]['channel_category']
             pos_items = []
 
             for item_id in range(self.m_items):
-                item_category = self.items.iloc[item_id]['item_category']  # 아이템 카테고리 가져오기
+                item_category = self.items.iloc[item_id]['item_category']
                 similarity_score = self.similarity_matrix[user_category, item_category]
 
-                # 유사도가 threshold 이상인 경우 테스트 데이터로 추가
                 if similarity_score >= threshold:
                     pos_items.append(item_id)
 
