@@ -22,16 +22,14 @@ class BPRLoss:
         loss += reg_loss
 
         self.opt.zero_grad()
-        loss.backward()
+        loss.backward(retain_graph=True)
         self.opt.step()
 
+        print(f"[DEBUG] Total Loss (with Regularization): {loss.item()}")
         return loss.cpu().item()
 
 
 def UniformSample_similarity_based(dataset):
-    """
-    Uniformly samples negative items for users based on similarity.
-    """
     allPos = dataset.allPos  # 긍정적 아이템
     allNeg = dataset.allNeg  # 부정적 아이템
     n_users = dataset.n_users
@@ -54,9 +52,7 @@ def UniformSample_similarity_based(dataset):
 
 
 def getFileName():
-    """
-    Generates a file name for saving model weights or embeddings.
-    """
+
     if world.model_name == 'mf':
         file = f"mf-{world.dataset}-{world.config['latent_dim']}.pth.tar"
     elif world.model_name == 'lgn':
@@ -67,9 +63,7 @@ def getFileName():
 
 
 def set_seed(seed):
-    """
-    Sets the random seed for reproducibility.
-    """
+
     np.random.seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
@@ -78,18 +72,14 @@ def set_seed(seed):
 
 
 def minibatch(*tensors, **kwargs):
-    """
-    Splits data into batches.
-    """
+
     batch_size = kwargs.get('batch_size', world.config['bpr_batch_size'])
     for i in range(0, len(tensors[0]), batch_size):
         yield tuple(x[i:i + batch_size] for x in tensors)
 
 
 def shuffle(*arrays, **kwargs):
-    """
-    Shuffles multiple arrays while preserving their order.
-    """
+
     shuffle_indices = np.arange(len(arrays[0]))
     np.random.shuffle(shuffle_indices)
     result = tuple(x[shuffle_indices] for x in arrays)
@@ -97,12 +87,22 @@ def shuffle(*arrays, **kwargs):
 
 
 def RecallPrecision_ATk(test_data, r, k):
+    # Test Data 디버깅
+    if not test_data:
+        print("[ERROR] Test data is empty. Ensure `testDict` is populated correctly.")
+        return {'recall': np.nan, 'precision': 0}
+
     right_pred = r[:, :k].sum(1)
     precis_n = k
     recall_n = np.array([len(test_data[i]) for i in range(len(test_data))])
+
+    if np.any(recall_n == 0):
+        print("[WARNING] Some users have no ground truth items in test data.")
+        recall_n[recall_n == 0] = 1
     recall = np.sum(right_pred / recall_n)
     precis = np.sum(right_pred) / precis_n
     return {'recall': recall, 'precision': precis}
+
 
 
 def NDCGatK_r(test_data, r, k):
@@ -120,18 +120,9 @@ def NDCGatK_r(test_data, r, k):
     return np.sum(ndcg)
 
 def getLabel(test_data, pred_data):
-    """
-    Compares predicted data with ground truth to generate binary relevance labels.
 
-    Parameters:
-    - test_data (list of lists): Ground truth data for each user or group.
-    - pred_data (list of lists): Predicted top-K items for each user or group.
-
-    Returns:
-    - np.ndarray: Binary relevance labels for each user or group.
-    """
     r = []
-    for groundTrue, predictTopK in zip(test_data, pred_data):  # 수정: zip을 사용해 더 직관적
-        pred = np.array([1.0 if x in groundTrue else 0.0 for x in predictTopK])  # 수정: list comprehension 사용
+    for groundTrue, predictTopK in zip(test_data, pred_data):
+        pred = np.array([1.0 if x in groundTrue else 0.0 for x in predictTopK])
         r.append(pred)
     return np.array(r)

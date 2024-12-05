@@ -24,8 +24,6 @@ def BPR_train(dataset, recommend_model, loss_class, epoch, neg_k=1, w=None):
     start_time = time()
     S = utils.UniformSample_similarity_based(dataset)  # Uniform sampling without threshold filtering
     sample_time = time() - start_time
-    print(f"[DEBUG] Sampled data S shape: {S.shape if isinstance(S, np.ndarray) else 'Not an ndarray'}")
-    print(f"[DEBUG] Sampled data S (first 5 rows): {S[:5] if isinstance(S, np.ndarray) else 'N/A'}")
 
     if len(S) == 0 or S.ndim < 2:
         print("[ERROR] Sampling returned empty or invalid results. Check the sampling logic.")
@@ -119,10 +117,11 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0):
             batch_users_gpu = torch.Tensor(batch_users).long().to(world.device)
             rating = Recmodel.getUsersRating(
                 batch_users_gpu,
-                creators_metadata=dataset.creators,
-                items_metadata=dataset.items,
-                similarity_matrix=dataset.similarity_matrix
-            )  # Predicted ratings
+                creators_metadata_tensor=torch.tensor(dataset.creators[['channel_category']].values,
+                                                      device=world.device),
+                items_metadata_tensor=torch.tensor(dataset.items[['item_category']].values, device=world.device),
+                similarity_matrix=torch.tensor(dataset.similarity_matrix, device=world.device)
+            )
 
             # Exclude training positives from recommendation
             exclude_index, exclude_items = [], []

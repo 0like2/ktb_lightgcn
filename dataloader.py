@@ -7,7 +7,7 @@ from torch.nn import Embedding
 from sentence_transformers import SentenceTransformer
 from model import to_sparse_tensor
 from world import cprint
-
+import random
 
 class BasicDataset:
     def __init__(self):
@@ -57,20 +57,15 @@ class TextEmbedder:
 
 
 class SimilarityDataset(BasicDataset):
-    """
-    Dataset class for category similarity-based LightGCN.
-    """
     def __init__(self, creator_file, item_file, similarity_matrix_file, config, threshold=0.05):
-        """
-        Initializes the dataset using metadata and precomputed similarity matrix.
-        """
+
         self.config=config
         self.similarity_matrix_file = similarity_matrix_file
         cprint("Loading metadata and similarity matrix...")
         self.creators = pd.read_csv(creator_file)
         self.items = pd.read_csv(item_file)
         try:
-            self._similarity_matrix = pd.read_csv(similarity_matrix_file, index_col=0).values  # 수정: 내부 변수 사용
+            self._similarity_matrix = pd.read_csv(similarity_matrix_file, index_col=0).values
         except FileNotFoundError:
             raise FileNotFoundError(f"Could not find file: {similarity_matrix_file}")
         except Exception as e:
@@ -105,18 +100,12 @@ class SimilarityDataset(BasicDataset):
         return self._similarity_matrix
 
     def _validate_creators(self, creators):
-        """
-        Validates and preprocesses creator metadata.
-        """
         creators['channel_category'] = creators['channel_category'].fillna('unknown').astype("category").cat.codes
         creators['channel_name'] = creators['channel_name'].fillna('unknown')
         creators['subscribers'] = creators['subscribers'].replace({',': ''}, regex=True).fillna(0).astype(float)
         return creators
 
     def _validate_items(self, items):
-        """
-        Validates and preprocesses item metadata.
-        """
         items['title'] = items['title'].fillna('unknown')
         items['item_category'] = items['item_category'].fillna('unknown').astype("category").cat.codes
         items['media_type'] = items['media_type'].fillna('unknown').map({'short': 0, 'long': 1}).fillna(0).astype(int)
@@ -125,21 +114,12 @@ class SimilarityDataset(BasicDataset):
         return items
 
     def normalize_subscribers(self, subscribers, max_value, scale=100):
-        """
-        Normalizes the subscriber count to a scale of 0 to 100.
-        """
         normalized = np.round((subscribers / max_value) * scale).astype(int)
         return np.clip(normalized, 0, scale)
 
     from scipy.sparse import csr_matrix, vstack, hstack
 
     def _build_graph(self):
-        # 디버깅 -> 삭제
-        print("[DEBUG] Building graph...")
-        print(f"[DEBUG] similarity_matrix shape: {self.similarity_matrix.shape}")
-        print(f"[DEBUG] n_users: {self.n_users}, m_items: {self.m_items}")
-        print(f"[DEBUG] creators shape: {len(self.creators)}, items shape: {len(self.items)}")
-
         n_users = self.n_users
         m_items = self.m_items
 
@@ -171,28 +151,28 @@ class SimilarityDataset(BasicDataset):
             user_category = self.creators.iloc[user_id]['channel_category']
             pos_items = []
 
+            # Calculate pos_items based on similarity threshold
             for item_id in range(self.m_items):
                 item_category = self.items.iloc[item_id]['item_category']
                 similarity_score = self.similarity_matrix[user_category, item_category]
-
                 if similarity_score >= threshold:
                     pos_items.append(item_id)
 
-            # 학습 데이터(allPos)와 겹치지 않도록 필터링
+            # Filter out items in allPos
             train_items = set(self.allPos[user_id])
             test_items = [item for item in pos_items if item not in train_items]
 
-            test_data[user_id] = test_items
+            # Add fallback logic to ensure test_items is not empty
+            if not test_items:
+                remaining_items = list(set(range(self.m_items)) - train_items)
+                test_items = random.sample(remaining_items, min(len(remaining_items), 5))  # Fallback to random sampling
 
-            # 디버깅 출력
-            print(f"[DEBUG] User ID: {user_id}, Test Items: {test_items}")
+            # Save to test_data
+            test_data[user_id] = test_items
 
         return test_data
 
     def _build_user_item_graph(self):
-        """
-        Builds the user-item graph based on the similarity matrix and user-item metadata.
-        """
         n_users = self.n_users
         m_items = self.m_items
 
@@ -219,15 +199,9 @@ class SimilarityDataset(BasicDataset):
 
 
     def getSparseGraph(self):
-        """
-        Returns the precomputed sparse graph.
-        """
         return self.graph
 
     def get_creator_features(self):
-        """
-        Returns features for creators.
-        """
         return {
             'category_embedding': self.category_embedding_layer(
                 torch.tensor(self.creators['channel_category'].values, dtype=torch.long)
@@ -237,9 +211,6 @@ class SimilarityDataset(BasicDataset):
         }
 
     def get_item_features(self):
-        """
-        Returns features for items.
-        """
         return {
             'category_embedding': self.category_embedding_layer(
                 torch.tensor(self.items['item_category'].values, dtype=torch.long)
@@ -270,9 +241,6 @@ class SimilarityDataset(BasicDataset):
 
     @property
     def allPos(self):
-        """
-        Generates positive interactions based on user-item graph.
-        """
         all_pos = {user: [] for user in range(self.n_users)}
         user_item_graph = self._build_user_item_graph()
 
@@ -281,15 +249,10 @@ class SimilarityDataset(BasicDataset):
         for user, item in zip(rows, cols):
             all_pos[user].append(item)
 
-        print(f"[DEBUG] All Positive Interactions: {len(all_pos)} users.")
         return all_pos
 
     @property
     def allNeg(self):
-        """
-        Generates negative interactions based on similarity threshold.
-        Only includes items with similarity below 0.35.
-        """
         all_neg = {user: [] for user in range(self.n_users)}
 
         for user_id in range(self.n_users):
@@ -308,7 +271,6 @@ class SimilarityDataset(BasicDataset):
 
             all_neg[user_id] = neg_items
 
-        print(f"[DEBUG] All Negative Interactions: {len(all_neg)} users.")
         return all_neg
 
     @property
